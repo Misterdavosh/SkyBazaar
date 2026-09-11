@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -124,7 +127,7 @@ type keymap struct {
 	halfUp   key.Binding
 	halfDown key.Binding
 	search   key.Binding
-	edit     key.Binding
+	open     key.Binding
 	done     key.Binding
 	sort     key.Binding
 	help     key.Binding
@@ -161,9 +164,9 @@ var keys = keymap{
 		key.WithKeys("/"),
 		key.WithHelp("/", "search"),
 	),
-	edit: key.NewBinding(
+	open: key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("enter", "edit search"),
+		key.WithHelp("enter", "open on coflnet"),
 	),
 	done: key.NewBinding(
 		key.WithKeys("esc"),
@@ -194,7 +197,7 @@ func (k keymap) ShortHelp() []key.Binding {
 func (k keymap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.up, k.down, k.top, k.bottom, k.halfUp, k.halfDown},
-		{k.search, k.edit, k.done, k.sort},
+		{k.search, k.open, k.done, k.sort},
 		{k.refresh, k.help, k.quit},
 	}
 }
@@ -300,6 +303,30 @@ func (m model) fetchItems() tea.Msg {
 	return itemsMsg{items: items, err: err}
 }
 
+func (m model) openCoflnet(id string) tea.Cmd {
+	url := fmt.Sprintf("https://sky.coflnet.com/item/%s", id)
+	cmd := execOpen(url)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Start(); err != nil {
+		m.err = fmt.Errorf("could not open browser: %w", err)
+	}
+	return nil
+}
+
+func execOpen(url string) *exec.Cmd {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", url)
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return exec.Command("xdg-open", url)
+	}
+}
+
 func tick() tea.Cmd {
 	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -367,7 +394,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.mode {
 		case modeSearch:
 			switch {
-			case key.Matches(msg, keys.done), key.Matches(msg, keys.edit):
+			case key.Matches(msg, keys.done), key.Matches(msg, keys.open):
 				m.mode = modeNav
 				m.search.Blur()
 				return m, nil
@@ -387,7 +414,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sortCur++
 				}
 				return m, nil
-			case key.Matches(msg, keys.edit):
+			case key.Matches(msg, keys.open):
 				m.sort = sortMode(m.sortCur)
 				m.cursor = 0
 				m.offset = 0
@@ -412,12 +439,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, keys.quit):
 				return m, tea.Quit
+			case key.Matches(msg, keys.open):
+				if len(m.items) > 0 {
+					return m, m.openCoflnet(m.items[m.cursor].ProductID)
+				}
 			case key.Matches(msg, keys.refresh):
 				if !m.fetching {
 					m.fetching = true
 					return m, m.fetch
 				}
-			case key.Matches(msg, keys.search), key.Matches(msg, keys.edit):
+			case key.Matches(msg, keys.search):
 				m.mode = modeSearch
 				return m, m.search.Focus()
 			case key.Matches(msg, keys.sort):
