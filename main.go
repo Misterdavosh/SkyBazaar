@@ -3,11 +3,8 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -435,26 +432,10 @@ func (m model) linkURL(id string) string {
 
 func (m model) openCoflnet(id string) tea.Cmd {
 	url := m.linkURL(id)
-	cmd := execOpen(url)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if err := openBrowser(url); err != nil {
 		m.err = fmt.Errorf("could not open browser: %w", err)
 	}
 	return nil
-}
-
-func execOpen(url string) *exec.Cmd {
-	switch runtime.GOOS {
-	case "darwin":
-		return exec.Command("open", url)
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return exec.Command("xdg-open", url)
-	}
 }
 
 func (m model) fetchShards() tea.Msg {
