@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -208,3 +209,54 @@ func fetchShards(client *http.Client) (map[string]shardInfo, error) {
 	}
 	return out, nil
 }
+
+const bestiaryURL = "https://raw.githubusercontent.com/NotEnoughUpdates/NotEnoughUpdates-REPO/master/constants/bestiary.json"
+
+// MobEntry is a bestiary entry: kill cap and difficulty bracket (1-8).
+type MobEntry struct {
+	Cap     int
+	Bracket int
+}
+
+// fetchBestiary returns a map of cleaned mob name -> bestiary kill cap and
+// difficulty bracket. Names have Minecraft color codes stripped.
+func fetchBestiary(client *http.Client) (map[string]MobEntry, error) {
+	resp, err := client.Get(bestiaryURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bestiary returned status %d", resp.StatusCode)
+	}
+	var doc any
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, err
+	}
+	mobs := make(map[string]MobEntry)
+	var walk func(v any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			if name, _ := t["name"].(string); name != "" {
+				cap, cok := t["cap"].(float64)
+				br, bok := t["bracket"].(float64)
+				if cok && bok && cap > 0 {
+					n := strings.TrimSpace(bestiaryColorRe.ReplaceAllString(name, ""))
+					mobs[n] = MobEntry{Cap: int(cap), Bracket: int(br)}
+				}
+			}
+			for _, sub := range t {
+				walk(sub)
+			}
+		case []any:
+			for _, sub := range t {
+				walk(sub)
+			}
+		}
+	}
+	walk(doc)
+	return mobs, nil
+}
+
+var bestiaryColorRe = regexp.MustCompile(`§.`)

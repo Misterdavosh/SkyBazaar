@@ -30,6 +30,10 @@ type shardsMsg struct {
 	shards map[string]shardInfo
 	err    error
 }
+type bestiaryMsg struct {
+	bestiary map[string]MobEntry
+	err      error
+}
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -84,6 +88,8 @@ var (
 			Background(lipgloss.AdaptiveColor{Light: "#99AAB5", Dark: "#3E4451"})
 
 	itemStyle = lipgloss.NewStyle().Bold(true)
+
+	effStyle = lipgloss.NewStyle().Foreground(themeBuy)
 
 	popupStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -231,6 +237,7 @@ const (
 	sortBuyDesc
 	sortBuyAsc
 	sortAlpha
+	sortFarmEff
 	sortModeCount
 )
 
@@ -240,6 +247,7 @@ var sortLabels = map[sortMode]string{
 	sortBuyDesc:  "highest buy order price",
 	sortBuyAsc:   "lowest buy order price",
 	sortAlpha:    "item name (A to Z)",
+	sortFarmEff:  "farm efficiency (price vs farm difficulty)",
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +289,7 @@ type model struct {
 	items    []Product
 	itemDB   map[string]ItemResource
 	shardDB  map[string]shardInfo
+	bestiary map[string]MobEntry
 	search   textinput.Model
 	client   *http.Client
 	err      error
@@ -337,6 +346,38 @@ func (m model) tier(id string) string {
 	return ""
 }
 
+// farmDifficulty estimates how hard a shard is to farm, based on its source
+// mob's bestiary difficulty bracket and kill cap when known, falling back to
+// the shard's rarity. Lower is easier.
+func (m model) farmDifficulty(id string) float64 {
+	name := ""
+	if s, ok := m.shardDB[id]; ok {
+		name = s.DisplayName
+	}
+	if mob, ok := m.bestiary[name]; ok && mob.Cap > 0 {
+		return float64(mob.Bracket) * 1000 / float64(mob.Cap)
+	}
+	rar := map[string]float64{
+		"COMMON": 1, "UNCOMMON": 2, "RARE": 4, "EPIC": 8,
+		"LEGENDARY": 16, "MYTHIC": 32, "SPECIAL": 64,
+	}
+	if s, ok := m.shardDB[id]; ok {
+		if d, ok := rar[s.Rarity]; ok {
+			return d * 1000 / 1000 * 10
+		}
+	}
+	return 100
+}
+
+// farmEfficiency is coins earned per unit of farming difficulty.
+func (m model) farmEfficiency(p Product) float64 {
+	d := m.farmDifficulty(p.ProductID)
+	if d <= 0 {
+		d = 1
+	}
+	return topSellOrder(p) / d
+}
+
 func (m model) fetch() tea.Msg {
 	data, err := fetchBazaar(m.client)
 	return fetchedMsg{data: data, err: err}
@@ -376,6 +417,11 @@ func (m model) fetchShards() tea.Msg {
 	return shardsMsg{shards: shards, err: err}
 }
 
+func (m model) fetchBestiary() tea.Msg {
+	mobs, err := fetchBestiary(m.client)
+	return bestiaryMsg{bestiary: mobs, err: err}
+}
+
 func tick() tea.Cmd {
 	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -383,7 +429,7 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.fetch, m.fetchItems, m.fetchShards, tick())
+	return tea.Batch(m.fetch, m.fetchItems, m.fetchShards, m.fetchBestiary, tick())
 }
 
 func (m *model) refreshList() {
@@ -423,6 +469,8 @@ func (m *model) sortItems() {
 		sort.SliceStable(items, func(i, j int) bool { return items[i].QuickStatus.SellPrice < items[j].QuickStatus.SellPrice })
 	case sortAlpha:
 		sort.SliceStable(items, func(i, j int) bool { return m.displayName(items[i].ProductID) < m.displayName(items[j].ProductID) })
+	case sortFarmEff:
+		sort.SliceStable(items, func(i, j int) bool { return m.farmEfficiency(items[i]) > m.farmEfficiency(items[j]) })
 	}
 }
 
@@ -486,7 +534,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = modeNav
 				return m, nil
 			default:
-				if len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '5' {
+				if len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '6' {
 					m.sort = sortMode(msg.Runes[0] - '1')
 					m.sortCur = int(m.sort)
 					m.cursor = 0
@@ -580,6 +628,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshList()
 		}
 		return m, nil
+	case bestiaryMsg:
+		if msg.err == nil {
+			m.bestiary = msg.bestiary
+			m.refreshList()
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -613,13 +667,17 @@ func (m model) tabBarView() string {
 }
 
 func (m model) headerView() string {
-	return fmt.Sprintf("%s %s %s %s %s",
+	base := fmt.Sprintf("%s %s %s %s %s",
 		headerStyle.Render(pad("ITEM", 26)),
 		headerStyle.Render(padRight("INSTASELL", 11)),
 		headerStyle.Render(padRight("INSTABUY", 11)),
 		headerStyle.Render(padRight("SELL ORDER", 12)),
 		headerStyle.Render(padRight("BUY ORDER", 11)),
 	)
+	if m.tab == tabShards {
+		base += " " + headerStyle.Render(padRight("EFF", 10))
+	}
+	return base
 }
 
 func (m model) rowView(i int) string {
@@ -630,6 +688,9 @@ func (m model) rowView(i int) string {
 	sellOrder := padRight(formatCoins(topSellOrder(p)), 12)
 	buyOrder := padRight(formatCoins(topBuyOrder(p)), 11)
 	row := fmt.Sprintf("%s %s %s %s %s", name, sell, buy, sellOrder, buyOrder)
+	if m.tab == tabShards {
+		row += " " + effStyle.Render(padRight(formatCoins(m.farmEfficiency(p)), 10))
+	}
 	if i == m.cursor {
 		row = cursorStyle.Render(pad(row, 77))
 	}
