@@ -13,6 +13,7 @@ A terminal UI (TUI) for browsing the [Hypixel SkyBlock Bazaar](https://wiki.hypi
 - Vim-style navigation: `j`/`k`, `g`/`G`, `ctrl+u`/`ctrl+d`
 - Sort popup (`s`) with five sort modes, and a keybinding reference popup (`?`)
 - Clean, single-palette TUI built with Bubble Tea and Lipgloss
+- Shards tab (press `tab`) with real shard rarities and a farm-efficiency sort: shards are ranked by price versus farming difficulty, sourced from the community bestiary (critters count as easy; regular mobs are scored by difficulty bracket vs kill cap)
 
 ## Usage
 
