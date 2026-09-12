@@ -45,3 +45,32 @@ func TestFarmEfficiency(t *testing.T) {
 		t.Fatalf("expected positive efficiency, got %f", eff)
 	}
 }
+
+func TestCrittersAreEasy(t *testing.T) {
+	c := &http.Client{Timeout: 20 * time.Second}
+	mobs, err := fetchBestiary(c)
+	if err != nil {
+		t.Skipf("bestiary unreachable: %v", err)
+	}
+	shards, err := fetchShards(c)
+	if err != nil {
+		t.Skipf("shards unreachable: %v", err)
+	}
+	m := newModel()
+	m.bestiary = mobs
+	m.shardDB = shards
+	// any shard whose source is a CRITTERS-type mob must have difficulty 1
+	critters := 0
+	for id, s := range shards {
+		if mob, ok := mobs[s.DisplayName]; ok && mob.Type == "CRITTERS" {
+			critters++
+			if d := m.farmDifficulty(id); d != 1 {
+				t.Fatalf("%s is a critter but difficulty=%v", id, d)
+			}
+		}
+	}
+	if critters == 0 {
+		t.Fatal("expected some critter-type shard sources")
+	}
+	t.Logf("critter-typed shard sources: %d", critters)
+}

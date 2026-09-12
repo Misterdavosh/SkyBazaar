@@ -212,10 +212,13 @@ func fetchShards(client *http.Client) (map[string]shardInfo, error) {
 
 const bestiaryURL = "https://raw.githubusercontent.com/NotEnoughUpdates/NotEnoughUpdates-REPO/master/constants/bestiary.json"
 
-// MobEntry is a bestiary entry: kill cap and difficulty bracket (1-8).
+// MobEntry is a bestiary entry: kill cap, difficulty bracket (1-8), and
+// bracket type. CRITTERS-type entries are caught rather than fought, so
+// their cap/bracket do not reflect farming difficulty.
 type MobEntry struct {
 	Cap     int
 	Bracket int
+	Type    string
 }
 
 // fetchBestiary returns a map of cleaned mob name -> bestiary kill cap and
@@ -241,9 +244,10 @@ func fetchBestiary(client *http.Client) (map[string]MobEntry, error) {
 			if name, _ := t["name"].(string); name != "" {
 				cap, cok := t["cap"].(float64)
 				br, bok := t["bracket"].(float64)
+				bt, _ := t["bracketType"].(string)
 				if cok && bok && cap > 0 {
 					n := strings.TrimSpace(bestiaryColorRe.ReplaceAllString(name, ""))
-					mobs[n] = MobEntry{Cap: int(cap), Bracket: int(br)}
+					mobs[n] = MobEntry{Cap: int(cap), Bracket: int(br), Type: bt}
 				}
 			}
 			for _, sub := range t {

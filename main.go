@@ -346,24 +346,30 @@ func (m model) tier(id string) string {
 	return ""
 }
 
-// farmDifficulty estimates how hard a shard is to farm, based on its source
-// mob's bestiary difficulty bracket and kill cap when known, falling back to
-// the shard's rarity. Lower is easier.
+// farmDifficulty estimates how hard a shard is to farm. Critter-type sources
+// are caught rather than fought, so they are always easy; regular mobs are
+// scored by bestiary difficulty bracket vs kill cap; anything unmatched falls
+// back to shard rarity. Lower is easier.
 func (m model) farmDifficulty(id string) float64 {
 	name := ""
 	if s, ok := m.shardDB[id]; ok {
 		name = s.DisplayName
 	}
-	if mob, ok := m.bestiary[name]; ok && mob.Cap > 0 {
-		return float64(mob.Bracket) * 1000 / float64(mob.Cap)
+	if mob, ok := m.bestiary[name]; ok {
+		if mob.Type == "CRITTERS" {
+			return 1
+		}
+		if mob.Cap > 0 {
+			return float64(mob.Bracket) * 1000 / float64(mob.Cap)
+		}
 	}
 	rar := map[string]float64{
-		"COMMON": 1, "UNCOMMON": 2, "RARE": 4, "EPIC": 8,
-		"LEGENDARY": 16, "MYTHIC": 32, "SPECIAL": 64,
+		"COMMON": 10, "UNCOMMON": 20, "RARE": 40, "EPIC": 80,
+		"LEGENDARY": 160, "MYTHIC": 320, "SPECIAL": 640,
 	}
 	if s, ok := m.shardDB[id]; ok {
 		if d, ok := rar[s.Rarity]; ok {
-			return d * 1000 / 1000 * 10
+			return d
 		}
 	}
 	return 100
