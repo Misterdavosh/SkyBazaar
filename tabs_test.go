@@ -31,3 +31,20 @@ func TestShardRarity(t *testing.T) {
 		t.Fatalf("expected rarity for SHARD_DIVE_GHAST, got %+v", s)
 	}
 }
+
+func TestFarmEffSortOnlyInShards(t *testing.T) {
+	m := newModel()
+	if got := m.sortOptionCount(); got != int(sortFarmEff) {
+		t.Fatalf("bazaar tab should hide farm-eff sort, got %d options", got)
+	}
+	m.tab = tabShards
+	if got := m.sortOptionCount(); got != int(sortModeCount) {
+		t.Fatalf("shards tab should show all sorts, got %d options", got)
+	}
+	// switching back from shards with farm-eff selected resets it
+	m.sort = sortFarmEff
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if m2.(model).sort == sortFarmEff {
+		t.Fatal("farm-eff sort should reset when leaving shards tab")
+	}
+}

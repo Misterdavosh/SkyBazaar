@@ -241,6 +241,15 @@ const (
 	sortModeCount
 )
 
+// sortOptionCount returns how many sort modes the current tab offers.
+// Farm efficiency is shards-only, since it has no meaning elsewhere.
+func (m model) sortOptionCount() int {
+	if m.tab == tabShards {
+		return int(sortModeCount)
+	}
+	return int(sortFarmEff)
+}
+
 var sortLabels = map[sortMode]string{
 	sortSellDesc: "highest sell order price",
 	sortSellAsc:  "lowest sell order price",
@@ -528,7 +537,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			case key.Matches(msg, keys.down):
-				if m.sortCur < int(sortModeCount)-1 {
+				if m.sortCur < m.sortOptionCount()-1 {
 					m.sortCur++
 				}
 				return m, nil
@@ -540,7 +549,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = modeNav
 				return m, nil
 			default:
-				if len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '6' {
+				if n := int(msg.Runes[0] - '1'); len(msg.Runes) == 1 && n >= 0 && n < m.sortOptionCount() {
 					m.sort = sortMode(msg.Runes[0] - '1')
 					m.sortCur = int(m.sort)
 					m.cursor = 0
@@ -571,10 +580,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.search.Focus()
 			case key.Matches(msg, keys.sort):
 				m.sortCur = int(m.sort)
+				if m.sortCur >= m.sortOptionCount() {
+					m.sortCur = 0
+				}
 				m.mode = modeSort
 				return m, nil
 			case key.Matches(msg, keys.tabs):
 				m.tab = (m.tab + 1) % tabCount
+				if m.tab != tabShards && m.sort == sortFarmEff {
+					m.sort = sortSellDesc
+				}
+				m.sortCur = int(m.sort)
 				m.cursor = 0
 				m.offset = 0
 				m.refreshList()
@@ -731,12 +747,12 @@ func (m model) sortPopupView() string {
 	var b strings.Builder
 	b.WriteString(popupTitleStyle.Render("Sort by") + "\n")
 	width := 0
-	for i := 0; i < int(sortModeCount); i++ {
+	for i := 0; i < m.sortOptionCount(); i++ {
 		if w := lipgloss.Width(fmt.Sprintf(" %d.  %s", i+1, sortLabels[sortMode(i)])); w > width {
 			width = w
 		}
 	}
-	for i := 0; i < int(sortModeCount); i++ {
+	for i := 0; i < m.sortOptionCount(); i++ {
 		plain := pad(fmt.Sprintf(" %d.  %s", i+1, sortLabels[sortMode(i)]), width)
 		if i == m.sortCur {
 			plain = "▸" + plain[1:]
