@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -170,4 +171,40 @@ func topBuyOrder(p Product) float64 {
 		}
 	}
 	return best
+}
+
+func decodeJSON(body io.Reader, v any) error {
+	return json.NewDecoder(body).Decode(v)
+}
+
+const shardsURL = "https://raw.githubusercontent.com/NotEnoughUpdates/NotEnoughUpdates-REPO/master/constants/attribute_shards.json"
+
+type shardInfo struct {
+	BazaarName  string `json:"bazaarName"`
+	DisplayName string `json:"displayName"`
+	Rarity      string `json:"rarity"`
+}
+
+// fetchShards returns a map of bazaar shard id -> shard name and rarity from
+// the community-maintained NotEnoughUpdates dataset.
+func fetchShards(client *http.Client) (map[string]shardInfo, error) {
+	resp, err := client.Get(shardsURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("shards dataset returned status %d", resp.StatusCode)
+	}
+	var raw struct {
+		Attributes []shardInfo `json:"attributes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	out := make(map[string]shardInfo, len(raw.Attributes))
+	for _, s := range raw.Attributes {
+		out[s.BazaarName] = s
+	}
+	return out, nil
 }

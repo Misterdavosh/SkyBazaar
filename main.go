@@ -26,6 +26,10 @@ type itemsMsg struct {
 	items map[string]ItemResource
 	err   error
 }
+type shardsMsg struct {
+	shards map[string]shardInfo
+	err    error
+}
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -100,6 +104,14 @@ var (
 	popupKeyStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(themeAccent)
+
+	tabActiveStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(themeTitle)
+
+	tabInactiveStyle = lipgloss.NewStyle().
+				Foreground(themeDim)
 )
 
 // Minecraft-style rarity colors.
@@ -131,6 +143,7 @@ type keymap struct {
 	done     key.Binding
 	sort     key.Binding
 	help     key.Binding
+	tabs     key.Binding
 	refresh  key.Binding
 	quit     key.Binding
 }
@@ -180,6 +193,10 @@ var keys = keymap{
 		key.WithKeys("?"),
 		key.WithHelp("?", "more help"),
 	),
+	tabs: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "switch tab"),
+	),
 	refresh: key.NewBinding(
 		key.WithKeys("ctrl+r"),
 		key.WithHelp("ctrl+r", "refresh"),
@@ -191,7 +208,7 @@ var keys = keymap{
 }
 
 func (k keymap) ShortHelp() []key.Binding {
-	return []key.Binding{k.up, k.down, k.search, k.sort, k.help, k.quit}
+	return []key.Binding{k.up, k.down, k.search, k.sort, k.tabs, k.help, k.quit}
 }
 
 func (k keymap) FullHelp() [][]key.Binding {
@@ -231,6 +248,25 @@ var sortLabels = map[sortMode]string{
 
 const listHeight = 18
 
+type tab int
+
+const (
+	tabBazaar tab = iota
+	tabShards
+	tabCount
+)
+
+var tabNames = map[tab]string{
+	tabBazaar: "Bazaar",
+	tabShards: "Shards",
+}
+
+// tabPrefix restricts a tab to products with this id prefix ("" = all).
+var tabPrefix = map[tab]string{
+	tabBazaar: "",
+	tabShards: "SHARD_",
+}
+
 type mode int
 
 const (
@@ -244,6 +280,7 @@ type model struct {
 	data     *BazaarResponse
 	items    []Product
 	itemDB   map[string]ItemResource
+	shardDB  map[string]shardInfo
 	search   textinput.Model
 	client   *http.Client
 	err      error
@@ -252,6 +289,7 @@ type model struct {
 	offset   int
 	sort     sortMode
 	sortCur  int // cursor inside the sort popup
+	tab      tab
 	mode     mode
 	help     help.Model
 	width    int
@@ -280,6 +318,9 @@ func rarityStyle(tier string) lipgloss.Style {
 
 // displayName returns the real in-game item name when known.
 func (m model) displayName(id string) string {
+	if s, ok := m.shardDB[id]; ok && s.DisplayName != "" {
+		return s.DisplayName + " Shard"
+	}
 	if it, ok := m.itemDB[id]; ok && it.Name != "" {
 		return it.Name
 	}
@@ -287,6 +328,9 @@ func (m model) displayName(id string) string {
 }
 
 func (m model) tier(id string) string {
+	if s, ok := m.shardDB[id]; ok && s.Rarity != "" {
+		return s.Rarity
+	}
 	if it, ok := m.itemDB[id]; ok {
 		return it.Tier
 	}
@@ -327,6 +371,11 @@ func execOpen(url string) *exec.Cmd {
 	}
 }
 
+func (m model) fetchShards() tea.Msg {
+	shards, err := fetchShards(m.client)
+	return shardsMsg{shards: shards, err: err}
+}
+
 func tick() tea.Cmd {
 	return tea.Tick(60*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -334,16 +383,31 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.fetch, m.fetchItems, tick())
+	return tea.Batch(m.fetch, m.fetchItems, m.fetchShards, tick())
 }
 
 func (m *model) refreshList() {
-	m.items = Items(m.data, m.search.Value(), m.displayName)
+	m.items = m.itemsForTab(Items(m.data, m.search.Value(), m.displayName))
 	m.sortItems()
 	if m.cursor >= len(m.items) {
 		m.cursor = max(len(m.items)-1, 0)
 	}
 	m.clampOffset()
+}
+
+// itemsForTab filters the product list down to the current tab.
+func (m model) itemsForTab(items []Product) []Product {
+	prefix := tabPrefix[m.tab]
+	if prefix == "" {
+		return items
+	}
+	out := make([]Product, 0, len(items))
+	for _, p := range items {
+		if strings.HasPrefix(p.ProductID, prefix) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (m *model) sortItems() {
@@ -455,6 +519,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortCur = int(m.sort)
 				m.mode = modeSort
 				return m, nil
+			case key.Matches(msg, keys.tabs):
+				m.tab = (m.tab + 1) % tabCount
+				m.cursor = 0
+				m.offset = 0
+				m.refreshList()
+				return m, nil
 			case key.Matches(msg, keys.help):
 				m.mode = modeHelp
 				return m, nil
@@ -504,6 +574,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshList()
 		}
 		return m, nil
+	case shardsMsg:
+		if msg.err == nil {
+			m.shardDB = msg.shards
+			m.refreshList()
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -522,6 +598,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ---------------------------------------------------------------------------
 // View
 // ---------------------------------------------------------------------------
+
+func (m model) tabBarView() string {
+	var parts []string
+	for t := tab(0); t < tabCount; t++ {
+		label := " " + tabNames[t] + " "
+		if t == m.tab {
+			parts = append(parts, tabActiveStyle.Render(label))
+		} else {
+			parts = append(parts, tabInactiveStyle.Render(label))
+		}
+	}
+	return strings.Join(parts, " ")
+}
 
 func (m model) headerView() string {
 	return fmt.Sprintf("%s %s %s %s %s",
@@ -639,7 +728,8 @@ func (m model) View() string {
 	if m.mode == modeSearch {
 		title += dimStyle.Render("  (editing search, esc to finish)")
 	}
-	b.WriteString(title + "\n\n")
+	b.WriteString(title + "\n")
+	b.WriteString(m.tabBarView() + "\n\n")
 
 	box := searchStyle
 	if m.mode == modeSearch {
