@@ -150,6 +150,7 @@ type keymap struct {
 	sort     key.Binding
 	help     key.Binding
 	tabs     key.Binding
+	link     key.Binding
 	refresh  key.Binding
 	quit     key.Binding
 }
@@ -203,6 +204,10 @@ var keys = keymap{
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "switch tab"),
 	),
+	link: key.NewBinding(
+		key.WithKeys("o"),
+		key.WithHelp("o", "link target"),
+	),
 	refresh: key.NewBinding(
 		key.WithKeys("ctrl+r"),
 		key.WithHelp("ctrl+r", "refresh"),
@@ -220,8 +225,8 @@ func (k keymap) ShortHelp() []key.Binding {
 func (k keymap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.up, k.down, k.top, k.bottom, k.halfUp, k.halfDown},
-		{k.search, k.open, k.done, k.sort},
-		{k.refresh, k.help, k.quit},
+		{k.search, k.open, k.done, k.sort, k.tabs},
+		{k.open, k.link, k.refresh, k.help, k.quit},
 	}
 }
 
@@ -284,6 +289,19 @@ var tabPrefix = map[tab]string{
 	tabShards: "SHARD_",
 }
 
+type linkTarget int
+
+const (
+	linkCoflnet linkTarget = iota
+	linkWiki
+	linkTargetCount
+)
+
+var linkNames = map[linkTarget]string{
+	linkCoflnet: "Coflnet",
+	linkWiki:    "SkyBlock Wiki",
+}
+
 type mode int
 
 const (
@@ -307,6 +325,7 @@ type model struct {
 	offset   int
 	sort     sortMode
 	sortCur  int // cursor inside the sort popup
+	link     linkTarget
 	tab      tab
 	mode     mode
 	help     help.Model
@@ -403,8 +422,19 @@ func (m model) fetchItems() tea.Msg {
 	return itemsMsg{items: items, err: err}
 }
 
+// linkURL returns the page URL for an item under the current link target.
+func (m model) linkURL(id string) string {
+	switch m.link {
+	case linkWiki:
+		name := strings.ReplaceAll(m.displayName(id), " ", "_")
+		return "https://hypixelskyblock.minecraft.wiki/w/" + name
+	default:
+		return fmt.Sprintf("https://sky.coflnet.com/item/%s", id)
+	}
+}
+
 func (m model) openCoflnet(id string) tea.Cmd {
-	url := fmt.Sprintf("https://sky.coflnet.com/item/%s", id)
+	url := m.linkURL(id)
 	cmd := execOpen(url)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = nil
@@ -584,6 +614,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.sortCur = 0
 				}
 				m.mode = modeSort
+				return m, nil
+			case key.Matches(msg, keys.link):
+				m.link = (m.link + 1) % linkTargetCount
 				return m, nil
 			case key.Matches(msg, keys.tabs):
 				m.tab = (m.tab + 1) % tabCount
@@ -797,11 +830,12 @@ func (m model) statusBarView() string {
 		left = "refreshing..."
 	}
 	sortLabel := "sort: " + sortLabels[m.sort]
-	gap := 78 - len(left) - len(sortLabel)
-	if gap < 1 {
-		gap = 1
+	linkLabel := "enter → " + linkNames[m.link]
+	gap := 78 - len(left) - len(sortLabel) - len(linkLabel)
+	if gap < 2 {
+		gap = 2
 	}
-	return dimStyle.Render(left + strings.Repeat(" ", gap) + sortLabel)
+	return dimStyle.Render(left + strings.Repeat(" ", gap) + sortLabel + "  " + linkLabel)
 }
 
 func (m model) View() string {
